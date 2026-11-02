@@ -1,0 +1,215 @@
+@startuml shared-backend-diagram
+title QualiTrack - Shared Backend
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+
+package "shared" {
+
+  package "application.result" {
+    record ApplicationError {
+      +code: String
+      +message: String
+      +details: String
+      +ApplicationError(code: String, message: String)
+      +validationError(fieldOrConcept: String, reason: String): ApplicationError
+      +notFound(resourceType: String, identifier: String): ApplicationError
+      +notFound(resourceType: String, identifier: Object): ApplicationError
+      +businessRuleViolation(rule: String, reason: String): ApplicationError
+      +conflict(resource: String, reason: String): ApplicationError
+      +externalServiceFailure(service: String, reason: String): ApplicationError
+      +unexpected(context: String, reason: String): ApplicationError
+    }
+
+    interface Result<T, E> <<sealed>> {
+      +success(value: T): Result<T, E>
+      +failure(error: E): Result<T, E>
+      +isSuccess(): boolean
+      +isFailure(): boolean
+      +toOptional(): Optional<T>
+      +getOrElse(defaultValue: T): T
+      +mapError(f: Function<E, E2>): Result<T, E2>
+      +flatMap(f: Function<T, Result<T2, E>>): Result<T2, E>
+      +map(f: Function<T, T2>): Result<T2, E>
+      +recover(f: Function<E, Result<T, E>>): Result<T, E>
+    }
+
+    record Success<T, E> {
+      +value: T
+    }
+
+    record Failure<T, E> {
+      +error: E
+    }
+  }
+
+  package "application.notifications" {
+    interface EmailSender {
+      +send(message: EmailMessage): boolean
+    }
+
+    record EmailMessage {
+      +to: String
+      +subject: String
+      +text: String
+    }
+  }
+
+  package "infrastructure.notifications.email" {
+    class ResendEmailSender {
+      +isConfigured(): boolean
+      +send(message: EmailMessage): boolean
+    }
+
+    class SmtpEmailSender {
+      +send(message: EmailMessage): boolean
+    }
+
+    class ConfiguredEmailSender <<primary>> {
+      +send(message: EmailMessage): boolean
+    }
+  }
+
+  package "domain.model.aggregates" {
+    abstract class AbstractDomainAggregateRoot<T> {
+      #registerDomainEvent(event: Object): void
+      +domainEvents(): Collection<Object>
+      +clearDomainEvents(): void
+    }
+  }
+
+  package "infrastructure.persistence.jpa.entities" {
+    abstract class AuditableAbstractPersistenceEntity {
+      -id: Long
+      -createdAt: Date
+      -updatedAt: Date
+      +getId(): Long
+      +getCreatedAt(): Date
+      +getUpdatedAt(): Date
+      +setId(id: Long): void
+    }
+  }
+
+  package "infrastructure.persistence.jpa.configuration.strategy" {
+    class SnakeCaseWithPluralizedTablePhysicalNamingStrategy {
+      +toPhysicalCatalogName(identifier: Identifier, jdbcEnvironment: JdbcEnvironment): Identifier
+      +toPhysicalSchemaName(identifier: Identifier, jdbcEnvironment: JdbcEnvironment): Identifier
+      +toPhysicalTableName(identifier: Identifier, jdbcEnvironment: JdbcEnvironment): Identifier
+      +toPhysicalSequenceName(identifier: Identifier, jdbcEnvironment: JdbcEnvironment): Identifier
+      +toPhysicalColumnName(identifier: Identifier, jdbcEnvironment: JdbcEnvironment): Identifier
+      -toSnakeCase(identifier: Identifier): Identifier
+      -toPlural(identifier: Identifier): Identifier
+    }
+  }
+
+  package "infrastructure.i18n.configuration" {
+    class LocaleConfiguration {
+      +localeResolver(): LocaleResolver
+    }
+  }
+
+  package "infrastructure.documentation.openapi.configuration" {
+    class OpenApiConfiguration {
+      -applicationName: String
+      -applicationDescription: String
+      -applicationVersion: String
+      +QualiTrackPlatformOpenApi(): OpenAPI
+    }
+  }
+
+  package "interfaces.rest.resources" {
+    record ErrorResource {
+      +code: String
+      +message: String
+      +details: String
+      +ErrorResource(code: String, message: String)
+    }
+  }
+
+  package "interfaces.rest.transform" {
+    class ErrorResponseAssembler <<final>> {
+      -MESSAGES_BASENAME: String
+      +toErrorResponseFromApplicationError(error: ApplicationError): ResponseEntity<ErrorResource>
+      +toStatusFromErrorCode(errorCode: String): HttpStatusCode
+      -toLocalizedMessageFromApplicationError(error: ApplicationError): String
+      -toSpecificMessageKeyFromErrorCode(errorCode: String): String
+      -toMessageKeyFromErrorCode(errorCode: String): String
+      -toEntityNameFromErrorCode(errorCode: String): String
+      -toLocalizedMessageOrNull(key: String, args: Object...): String
+      -toLocalizedMessageWithFallback(key: String, fallback: String, args: Object...): String
+    }
+
+    class ResponseEntityAssembler <<final>> {
+      +toResponseEntityFromResult(result: Result<T, ApplicationError>, successResourceAssembler: Function<T, R>, successStatus: HttpStatusCode): ResponseEntity<?>
+    }
+  }
+
+  package "interfaces.rest" {
+    class GlobalExceptionHandler {
+      -MESSAGES_BASENAME: String
+      +handleMalformedRequest(ex: Exception): ResponseEntity<?>
+      +handleApplicationException(ex: ApplicationException): ResponseEntity<?>
+      +handleAccessDenied(ex: AccessDeniedException): ResponseEntity<?>
+      +handleNoResourceFound(ex: NoResourceFoundException): ResponseEntity<?>
+      +handleMethodNotSupported(ex: HttpRequestMethodNotSupportedException): ResponseEntity<?>
+      +handleMediaTypeNotSupported(ex: HttpMediaTypeNotSupportedException): ResponseEntity<?>
+      +handleMethodArgumentNotValid(ex: MethodArgumentNotValidException): ResponseEntity<?>
+      +handleIllegalArgumentException(ex: IllegalArgumentException): ResponseEntity<?>
+      +handleRuntimeException(ex: RuntimeException): ResponseEntity<?>
+      +handleException(ex: Exception): ResponseEntity<?>
+      -resolveMessageOrDefault(key: String, defaultValue: String, args: Object...): String
+    }
+  }
+}
+
+Result <|.. Success
+Result <|.. Failure
+
+EmailSender ..> EmailMessage
+ResendEmailSender ..|> EmailSender
+SmtpEmailSender ..|> EmailSender
+ConfiguredEmailSender ..|> EmailSender
+ConfiguredEmailSender --> ResendEmailSender
+ConfiguredEmailSender --> SmtpEmailSender
+note bottom of ConfiguredEmailSender
+  Transactional e-mails (staff credentials, password recovery codes):
+  Resend API (POST /emails over HTTPS) when RESEND_API_KEY is set,
+  otherwise the SMTP server of spring.mail.*; without either nothing is sent.
+end note
+
+AbstractDomainAggregateRoot --|> AbstractAggregateRoot
+AuditableAbstractPersistenceEntity ..> AuditingEntityListener
+
+SnakeCaseWithPluralizedTablePhysicalNamingStrategy ..|> PhysicalNamingStrategy
+SnakeCaseWithPluralizedTablePhysicalNamingStrategy ..> Identifier
+SnakeCaseWithPluralizedTablePhysicalNamingStrategy ..> JdbcEnvironment
+
+LocaleConfiguration ..> LocaleResolver
+LocaleConfiguration ..> AcceptHeaderLocaleResolver
+
+OpenApiConfiguration ..> OpenAPI
+OpenApiConfiguration ..> SecurityScheme
+OpenApiConfiguration ..> SecurityRequirement
+
+ErrorResponseAssembler ..> ApplicationError
+ErrorResponseAssembler ..> ErrorResource
+ErrorResponseAssembler ..> LocaleContextHolder
+ErrorResponseAssembler ..> ResourceBundle
+ErrorResponseAssembler ..> HttpStatusCode
+
+ResponseEntityAssembler ..> Result
+ResponseEntityAssembler ..> ApplicationError
+ResponseEntityAssembler ..> ErrorResponseAssembler
+
+GlobalExceptionHandler ..> ApplicationError
+GlobalExceptionHandler ..> ErrorResponseAssembler
+GlobalExceptionHandler ..> MethodArgumentNotValidException
+GlobalExceptionHandler ..> LocaleContextHolder
+GlobalExceptionHandler ..> ResourceBundle
+note bottom of GlobalExceptionHandler
+  Errors answer the standard ErrorResource body: 400 invalid request, 403 ACCESS_DENIED,
+  404 RESOURCE_NOT_FOUND for unknown routes, 405 METHOD_NOT_ALLOWED with Allow,
+  415 UNSUPPORTED_MEDIA_TYPE, 409 conflicts and 500 unexpected errors.
+end note
+
+@enduml

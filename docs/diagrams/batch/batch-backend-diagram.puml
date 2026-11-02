@@ -1,0 +1,444 @@
+@startuml batch-backend-diagram
+
+title QualiTrack - Product Batch Management Backend Class Diagram
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam linetype ortho
+
+package "shared" <<External>> {
+  abstract class AbstractDomainAggregateRoot
+  abstract class AuditableAbstractPersistenceEntity
+  class ApplicationError
+  class Result
+  class ResponseEntityAssembler
+  interface CurrentUser
+  interface TenantResourceLookup
+}
+
+package "laboratory" <<External>> {
+  interface LaboratoryContextFacade
+}
+
+package "inventory" <<External>> {
+  interface InventoryContextFacade
+  class ReceiptConsumedIntegrationEvent <<record>>
+}
+
+package "equipment" <<External>> {
+  interface EquipmentContextFacade
+}
+
+package "batch.domain.model.valueobjects" {
+  enum BatchStatus {
+    PENDING
+    IN_PROGRESS
+    RELEASED
+    REJECTED
+  }
+  class BatchRelease <<record>>
+  class BatchRejection <<record>>
+  class BatchTraceability <<record>>
+  class ContainerAssignment <<record>> {
+    + containerMonitorId: Long
+    + environmentId: Long
+    + assignedBy: Long
+    + assignedAt: Instant
+    + isIn(containerMonitorId: Long): boolean
+  }
+  class BatchContainer <<record>> {
+    + batchId: Long
+    + containerMonitorId: Long
+    + containerName: String
+    + environmentId: Long
+    + assignedBy: Long
+    + assignedAt: Instant
+  }
+}
+
+package "batch.domain.model.aggregates" {
+  class PharmaceuticalProduct {
+    - id: Long
+    - laboratoryId: Long
+    - environmentId: Long
+    - code: String
+    - name: String
+    - description: String
+    - specifications: String
+    - active: boolean
+    + belongsTo(laboratoryId, environmentId): boolean
+  }
+
+  class Batch {
+    - id: Long
+    - labId: Long
+    - environmentId: Long
+    - productId: Long
+    - productName: String
+    - batchNumber: String
+    - quantity: Double
+    - unit: String
+    - status: BatchStatus
+    - startDate: String
+    - endDate: String
+    - notes: String
+    - containerAssignment: ContainerAssignment
+    + belongsTo(laboratoryId, environmentId, productId): boolean
+    + isOpen(): boolean
+    + start(): void
+    + registerRawMaterialConsumption(): boolean
+    + release(command: ReleaseBatchCommand): void
+    + reject(command: RejectBatchCommand): void
+    + storeIn(assignment: ContainerAssignment): boolean
+    + container(): Optional<ContainerAssignment>
+  }
+}
+
+PharmaceuticalProduct --|> AbstractDomainAggregateRoot
+Batch --|> AbstractDomainAggregateRoot
+Batch --> BatchStatus
+Batch ..> PharmaceuticalProduct : productId
+Batch --> "0..1" ContainerAssignment : stored in
+
+package "batch.domain.model.entities" {
+  class RawMaterialUsage {
+    - batchId: Long
+    - rawMaterialId: Long
+    - inventoryReceiptId: Long
+    - quantityUsed: Double
+    - stockBefore: BigDecimal
+    - stockAfter: BigDecimal
+    - operationId: String
+  }
+  class EquipmentUsage {
+    - batchId: Long
+    - equipmentId: Long
+    - equipmentName: String
+    - registeredByUserId: Long
+  }
+  class StaffParticipation {
+    - batchId: Long
+    - staffId: Long
+    - staffName: String
+    - staffRole: String
+    - registeredByUserId: Long
+  }
+  class DigitalSignature {
+    - batchId: Long
+    - signedByUserId: Long
+    - signatureHash: String
+    - signedAt: String
+    + {static} sign(batch, userId, signedAt): DigitalSignature
+  }
+  class RejectionRecord {
+    - batchId: Long
+    - rejectionDate: String
+    - reason: String
+  }
+}
+
+BatchRelease --> Batch
+BatchRelease --> DigitalSignature
+BatchRejection --> Batch
+BatchRejection --> RejectionRecord
+BatchTraceability --> Batch
+BatchTraceability --> PharmaceuticalProduct
+BatchTraceability --> RawMaterialUsage
+BatchTraceability --> EquipmentUsage
+BatchTraceability --> StaffParticipation
+BatchTraceability --> "0..1" BatchContainer : container
+
+package "batch.domain.model.commands" {
+  class CreateProductCommand <<record>>
+  class CreateBatchCommand <<record>>
+  class ReleaseBatchCommand <<record>>
+  class RejectBatchCommand <<record>>
+  class RegisterRawMaterialUsageCommand <<record>>
+  class RegisterEquipmentUsageCommand <<record>>
+  class RegisterStaffParticipationCommand <<record>>
+  class AssignBatchContainerCommand <<record>>
+}
+
+package "batch.domain.model.queries" {
+  class GetProductsByEnvironmentQuery <<record>>
+  class GetProductByIdQuery <<record>>
+  class GetBatchesByProductQuery <<record>>
+  class GetProductBatchQuery <<record>>
+  class GetBatchesByLabIdQuery <<record>>
+  class GetBatchByIdQuery <<record>>
+  class GetBatchTraceabilityQuery <<record>>
+  class GetRawMaterialUsagesByInventoryMaterialQuery <<record>>
+  class GetRawMaterialHistoryQuery <<record>>
+  class GetBatchContainerQuery <<record>>
+}
+
+package "batch.domain.model.events" {
+  class ProductCreatedEvent <<record>>
+  class BatchCreatedEvent <<record>>
+  class BatchStartedEvent <<record>> {
+    + startedAt: Instant
+  }
+  class BatchReleasedEvent <<record>> {
+    + releasedBy: Long
+  }
+  class BatchRejectedEvent <<record>> {
+    + rejectedBy: Long
+  }
+  class RawMaterialLinkedToBatchEvent <<record>>
+  class BatchParticipationRegisteredEvent <<record>>
+  class BatchStoredInContainerEvent <<record>>
+}
+
+package "batch.domain.repositories" {
+  interface ProductRepository
+  interface BatchRepository
+  interface RawMaterialUsageRepository
+  interface BatchParticipationRepository
+  interface BatchEvidenceRepository
+}
+
+package "batch.application.commandservices" {
+  interface ProductCommandService
+  interface BatchCommandService {
+    + handle(AssignBatchContainerCommand): Result<BatchContainer, ApplicationError>
+  }
+  interface RawMaterialUsageCommandService
+  interface BatchParticipationCommandService
+}
+
+package "batch.application.queryservices" {
+  interface ProductQueryService
+  interface BatchQueryService {
+    + handle(GetBatchContainerQuery): Optional<BatchContainer>
+  }
+  interface BatchTraceabilityQueryService
+  interface RawMaterialUsageQueryService
+}
+
+package "batch.application.internal.commandservices" {
+  class ProductCommandServiceImpl
+  class BatchCommandServiceImpl
+  class RawMaterialUsageCommandServiceImpl
+  class BatchParticipationCommandServiceImpl
+}
+
+ProductCommandServiceImpl ..|> ProductCommandService
+BatchCommandServiceImpl ..|> BatchCommandService
+RawMaterialUsageCommandServiceImpl ..|> RawMaterialUsageCommandService
+BatchParticipationCommandServiceImpl ..|> BatchParticipationCommandService
+
+ProductCommandServiceImpl --> ProductRepository
+BatchCommandServiceImpl --> BatchRepository
+BatchCommandServiceImpl --> ProductRepository
+BatchCommandServiceImpl --> BatchEvidenceRepository
+BatchCommandServiceImpl --> CurrentUser
+BatchCommandServiceImpl ..> BatchStoredInContainerEvent : publishes
+RawMaterialUsageCommandServiceImpl --> BatchRepository
+RawMaterialUsageCommandServiceImpl --> RawMaterialUsageRepository
+BatchParticipationCommandServiceImpl --> BatchParticipationRepository
+BatchParticipationCommandServiceImpl --> CurrentUser
+
+package "batch.application.internal.queryservices" {
+  class ProductQueryServiceImpl
+  class BatchQueryServiceImpl
+  class BatchTraceabilityQueryServiceImpl
+  class RawMaterialUsageQueryServiceImpl
+}
+
+ProductQueryServiceImpl ..|> ProductQueryService
+BatchQueryServiceImpl ..|> BatchQueryService
+BatchTraceabilityQueryServiceImpl ..|> BatchTraceabilityQueryService
+RawMaterialUsageQueryServiceImpl ..|> RawMaterialUsageQueryService
+BatchTraceabilityQueryServiceImpl --> BatchParticipationRepository
+BatchTraceabilityQueryServiceImpl --> BatchEvidenceRepository
+BatchTraceabilityQueryServiceImpl --> RawMaterialUsageRepository
+
+package "batch.application.internal.eventhandlers" {
+  class ProductCreatedEventHandler
+  class BatchCreatedEventHandler
+  class BatchStartedEventHandler
+  class BatchReleasedEventHandler
+  class BatchRejectedEventHandler
+  class RawMaterialLinkedToBatchEventHandler
+  class BatchParticipationRegisteredEventHandler
+  class BatchStoredInContainerEventHandler
+  class ReceiptConsumedEventHandler
+}
+
+ReceiptConsumedEventHandler ..> ReceiptConsumedIntegrationEvent
+ReceiptConsumedEventHandler --> RawMaterialUsageRepository
+ReceiptConsumedEventHandler --> BatchRepository
+ReceiptConsumedEventHandler ..> BatchStartedEvent
+BatchStartedEventHandler ..> BatchStartedEvent
+note right of ReceiptConsumedEventHandler
+  Inventory publishes the confirmed consumption
+  in the same transaction; the usage keeps the
+  lot, the stock change and the operation id.
+  The first consumption starts a pending batch
+  (PENDING -> IN_PROGRESS, US75).
+end note
+
+package "batch.application.internal.outboundservices.acl" {
+  class ExternalLaboratoryService {
+    + findEnvironment(laboratoryId, environmentId): Optional<EnvironmentReference>
+  }
+  class BatchExternalInventoryService
+  class BatchExternalEquipmentService {
+    + findContainerMonitor(laboratoryId, deviceId): Optional<ContainerReference>
+  }
+  class BatchExternalComplianceService
+}
+
+ProductCommandServiceImpl --> ExternalLaboratoryService
+BatchCommandServiceImpl --> BatchExternalEquipmentService
+BatchCommandServiceImpl --> ExternalLaboratoryService
+RawMaterialUsageCommandServiceImpl --> BatchExternalInventoryService
+BatchParticipationCommandServiceImpl --> BatchExternalEquipmentService
+BatchParticipationCommandServiceImpl --> ExternalLaboratoryService
+BatchTraceabilityQueryServiceImpl --> BatchExternalInventoryService
+BatchTraceabilityQueryServiceImpl --> BatchExternalEquipmentService
+BatchQueryServiceImpl --> BatchExternalEquipmentService
+
+ExternalLaboratoryService --> LaboratoryContextFacade
+BatchExternalInventoryService --> InventoryContextFacade
+BatchExternalEquipmentService --> EquipmentContextFacade
+
+package "batch.application.acl" {
+  class BatchContextFacadeImpl
+}
+
+package "batch.interfaces.acl" {
+  interface BatchContextFacade {
+    + requireConsumable(batchId, laboratoryId): void
+    + existsBatchById(batchId): boolean
+    + belongsToLaboratory(batchId, laboratoryId): boolean
+    + isBatchReleased(batchId): boolean
+    + isBatchRejected(batchId): boolean
+    + findTraceability(batchId): Optional<TraceabilityReference>
+  }
+  class TraceabilityReference <<record>> {
+    + batchId: Long
+    + productCode: String
+    + materials: List<MaterialUse>
+    + equipment: List<EquipmentUse>
+    + staff: List<StaffUse>
+    + container: ContainerUse
+    + release: ReleaseSignature
+    + rejection: RejectionNote
+  }
+  class BatchTenantResourceLookup
+}
+
+BatchContextFacadeImpl ..|> BatchContextFacade
+BatchContextFacade ..> TraceabilityReference
+note bottom of BatchContextFacade
+  findTraceability: materials with their lots and stock, equipment, staff,
+  container and quality decision, read by the batch report of Reporting (US96).
+end note
+BatchTenantResourceLookup ..|> TenantResourceLookup
+note bottom of BatchTenantResourceLookup
+  Resolves the laboratory of batchId and productId
+  path variables for tenant isolation.
+end note
+
+package "batch.interfaces.events" {
+  class ProductCreatedIntegrationEvent <<record>>
+  class BatchCreatedIntegrationEvent <<record>>
+  class BatchStartedIntegrationEvent <<record>> {
+    + startedAt: Instant
+  }
+  class BatchReleasedIntegrationEvent <<record>> {
+    + releasedBy: Long
+  }
+  class BatchRejectedIntegrationEvent <<record>> {
+    + rejectedBy: Long
+  }
+  class RawMaterialLinkedToBatchIntegrationEvent <<record>>
+  class BatchParticipationRegisteredIntegrationEvent <<record>>
+  class BatchStoredInContainerIntegrationEvent <<record>>
+}
+
+BatchStoredInContainerEventHandler ..> BatchStoredInContainerEvent
+BatchStoredInContainerEventHandler ..> BatchStoredInContainerIntegrationEvent : publishes
+BatchStartedEventHandler ..> BatchStartedIntegrationEvent : publishes
+
+package "batch.infrastructure.persistence.jpa" {
+  class ProductPersistenceEntity
+  class BatchPersistenceEntity
+  class RawMaterialUsagePersistenceEntity
+  class EquipmentUsagePersistenceEntity
+  class StaffParticipationPersistenceEntity
+  class DigitalSignaturePersistenceEntity
+  class RejectionRecordPersistenceEntity
+  class ProductRepositoryImpl
+  class BatchRepositoryImpl
+  class RawMaterialUsageRepositoryImpl
+  class BatchParticipationRepositoryImpl
+  class BatchEvidenceRepositoryImpl
+}
+
+ProductPersistenceEntity --|> AuditableAbstractPersistenceEntity
+BatchPersistenceEntity --|> AuditableAbstractPersistenceEntity
+RawMaterialUsagePersistenceEntity --|> AuditableAbstractPersistenceEntity
+EquipmentUsagePersistenceEntity --|> AuditableAbstractPersistenceEntity
+StaffParticipationPersistenceEntity --|> AuditableAbstractPersistenceEntity
+ProductRepositoryImpl ..|> ProductRepository
+BatchRepositoryImpl ..|> BatchRepository
+RawMaterialUsageRepositoryImpl ..|> RawMaterialUsageRepository
+BatchParticipationRepositoryImpl ..|> BatchParticipationRepository
+BatchEvidenceRepositoryImpl ..|> BatchEvidenceRepository
+
+package "batch.interfaces.rest" {
+  class EnvironmentProductsController <<RestController>> {
+    POST /laboratories/{laboratoryId}/environments/{environmentId}/products
+    GET  .../products
+    GET  .../products/{productId}
+  }
+  class ProductBatchesController <<RestController>> {
+    POST .../products/{productId}/batches
+    GET  .../products/{productId}/batches
+    GET  .../batches/{batchId}
+    POST .../batches/{batchId}/releases
+    POST .../batches/{batchId}/rejections
+  }
+  class BatchManufacturingController <<RestController>> {
+    POST .../batches/{batchId}/raw-material-usages
+    POST .../batches/{batchId}/equipment-usages
+    POST .../batches/{batchId}/staff-participations
+    GET  .../batches/{batchId}/traceability
+    GET  .../batches/{batchId}/container-assignment
+    PUT  .../batches/{batchId}/container-assignment
+  }
+  class LaboratoryBatchesController <<RestController>> {
+    GET /laboratories/{laboratoryId}/batches
+  }
+  class EnvironmentRawMaterialUsagesController <<RestController>> {
+    GET .../environments/{environmentId}/raw-materials/{rawMaterialId}/usages
+  }
+  class RawMaterialHistoryController <<RestController>> {
+    GET /laboratories/{laboratoryId}/raw-materials/{legacyRawMaterialId}/usages
+  }
+}
+
+EnvironmentProductsController --> ProductCommandService
+EnvironmentProductsController --> ProductQueryService
+ProductBatchesController --> BatchCommandService
+ProductBatchesController --> BatchQueryService
+BatchManufacturingController --> RawMaterialUsageCommandService
+BatchManufacturingController --> BatchParticipationCommandService
+BatchManufacturingController --> BatchTraceabilityQueryService
+BatchManufacturingController --> BatchCommandService
+BatchManufacturingController --> BatchQueryService
+note bottom of BatchManufacturingController
+  PUT container-assignment stores the batch in an OPERATIONAL container monitor
+  located in a PRODUCT_STORAGE environment of the laboratory (US78, TS68).
+end note
+LaboratoryBatchesController --> BatchQueryService
+EnvironmentRawMaterialUsagesController --> RawMaterialUsageQueryService
+RawMaterialHistoryController --> RawMaterialUsageQueryService
+EnvironmentProductsController ..> ResponseEntityAssembler
+ProductBatchesController ..> ResponseEntityAssembler
+BatchManufacturingController ..> ResponseEntityAssembler
+
+@enduml

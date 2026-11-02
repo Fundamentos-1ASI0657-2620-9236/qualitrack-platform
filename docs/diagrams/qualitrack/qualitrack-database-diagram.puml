@@ -1,0 +1,613 @@
+@startuml qualitrack-database-diagram
+title QualiTrack - Complete Database Diagram by Bounded Contexts
+
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam shadowing false
+hide circle
+hide stereotypes
+
+package "IAM Context" {
+  entity "iam_users" as iam_users {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * username : VARCHAR(80) <<UK>>
+    email : VARCHAR(120) <<UK>>
+    * password : VARCHAR(255)
+    laboratory_id : BIGINT
+    * status : VARCHAR(50)
+    * password_change_required : BOOLEAN
+  }
+
+  entity "iam_password_recoveries" as iam_password_recoveries {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * user_id : BIGINT <<FK>>
+    * code_hash : VARCHAR(255)
+    * requested_at : DATETIME
+    * expires_at : DATETIME
+    * failed_attempts : INT
+    * status : VARCHAR(20)
+    completed_at : DATETIME
+  }
+
+  entity "iam_roles" as iam_roles {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * name : VARCHAR(80) <<UK>>
+  }
+
+  entity "iam_user_roles" as iam_user_roles {
+    * user_id : BIGINT <<FK>>
+    * role_id : BIGINT <<FK>>
+  }
+
+  iam_users ||--o{ iam_user_roles : "user_id"
+  iam_users ||--o{ iam_password_recoveries : "user_id"
+  iam_roles ||--o{ iam_user_roles : "role_id"
+}
+
+package "Profile Context" {
+  entity "profiles" as profiles {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * user_id : BIGINT <<UK>>
+    full_name : VARCHAR(120)
+    dni : VARCHAR(8)
+    phone_number : VARCHAR(30)
+    location : VARCHAR(120)
+    photo_content_type : VARCHAR(20)
+    photo_size_bytes : INT
+    photo_updated_at : DATETIME
+  }
+
+  entity "profile_photos" as profile_photos {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * profile_id : BIGINT <<UK>>
+    * content_type : VARCHAR(20)
+    * content : MEDIUMBLOB
+  }
+
+  profiles ||--o| profile_photos : "profile_id"
+}
+
+package "Laboratory Context" {
+  entity "laboratories" as laboratories {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * name : VARCHAR(100)
+    * ruc : VARCHAR(20) <<UK>>
+    * address : VARCHAR(255)
+    * phone : VARCHAR(50)
+    * status : VARCHAR(255)
+  }
+
+  entity "laboratory_regulations" as laboratory_regulations {
+    * laboratory_id : BIGINT <<FK>>
+    * regulation : VARCHAR(255)
+  }
+
+  entity "staff_members" as staff_members {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT <<FK>>
+    * full_name : VARCHAR(150)
+    * role : VARCHAR(100)
+    * email : VARCHAR(150) <<UK>>
+    * active : BOOLEAN
+  }
+
+  entity "pharmaceutical_products" as pharmaceutical_products {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT <<FK>>
+    * code : VARCHAR(50) <<UK>>
+    * name : VARCHAR(150)
+    description : VARCHAR(500)
+    * specifications : VARCHAR(1000)
+    * active : BOOLEAN
+  }
+
+  entity "raw_materials" as raw_materials {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT <<FK>>
+    * name : VARCHAR(150)
+    * code : VARCHAR(50) <<UK>>
+    * supplier : VARCHAR(150)
+    * batch_number : VARCHAR(50)
+    * expiration_date : VARCHAR(20)
+    * quantity_in_stock : DECIMAL(19,3)
+    * unit : VARCHAR(20)
+    * minimum_stock : DECIMAL(19,3)
+  }
+
+  laboratories ||--o{ laboratory_regulations : "laboratory_id"
+  laboratories ||--o{ staff_members : "laboratory_id"
+  laboratories ||--o{ pharmaceutical_products : "laboratory_id"
+  laboratories ||--o{ raw_materials : "laboratory_id"
+}
+
+package "Inventory Context" {
+  entity "inventory_materials" as inventory_materials {
+    * <u>id</u> : BIGINT PK AUTO_INCREMENT
+    --
+    laboratory_id : BIGINT NOT NULL
+    legacy_id : BIGINT NULL
+    code : VARCHAR(50) NOT NULL
+    name : VARCHAR(150) NOT NULL
+    unit : VARCHAR(20) NOT NULL
+    minimum_stock : DECIMAL(19,3) NOT NULL
+    created_at : DATETIME(6) NOT NULL
+    updated_at : DATETIME(6) NOT NULL
+    --
+    UNIQUE (laboratory_id, code)
+    UNIQUE (laboratory_id, legacy_id)
+  }
+  entity "inventory_receipts" as inventory_receipts {
+    * <u>id</u> : BIGINT PK AUTO_INCREMENT
+    --
+    laboratory_id : BIGINT NOT NULL
+    material_id : BIGINT NOT NULL
+    supplier : VARCHAR(150) NOT NULL
+    batch_number : VARCHAR(50) NOT NULL
+    unit : VARCHAR(20) NOT NULL
+    initial_amount : DECIMAL(19,3) NOT NULL
+    available_amount : DECIMAL(19,3) NOT NULL
+    received_on : DATE NOT NULL
+    expires_on : DATE NOT NULL
+    status : VARCHAR(20) NOT NULL
+    container_monitor_id : BIGINT NULL
+    container_environment_id : BIGINT NULL
+    container_assigned_by : BIGINT NULL
+    container_assigned_at : DATETIME(6) NULL
+    created_at : DATETIME(6) NOT NULL
+    updated_at : DATETIME(6) NOT NULL
+    --
+    UNIQUE (laboratory_id, material_id, supplier, batch_number)
+  }
+  entity "inventory_movements" as inventory_movements {
+    * <u>id</u> : BIGINT PK AUTO_INCREMENT
+    --
+    laboratory_id : BIGINT NOT NULL
+    material_id : BIGINT NOT NULL
+    receipt_id : BIGINT NOT NULL
+    product_batch_id : BIGINT NULL
+    type : VARCHAR(20) NOT NULL
+    amount : DECIMAL(19,3) NOT NULL
+    unit : VARCHAR(20) NOT NULL
+    stock_before : DECIMAL(19,3) NOT NULL
+    stock_after : DECIMAL(19,3) NOT NULL
+    status_before : VARCHAR(20) NULL
+    status_after : VARCHAR(20) NOT NULL
+    reason : VARCHAR(500) NOT NULL
+    actor_id : BIGINT NOT NULL
+    occurred_at : DATETIME(6) NOT NULL
+    operation_id : VARCHAR(100) NULL
+    created_at : DATETIME(6) NOT NULL
+    updated_at : DATETIME(6) NOT NULL
+    --
+    UNIQUE (laboratory_id, operation_id)
+  }
+}
+
+inventory_materials ||..o{ inventory_receipts : material_id
+inventory_materials ||..o{ inventory_movements : material_id
+inventory_receipts ||..o{ inventory_movements : receipt_id
+
+package "Equipment Context" {
+  entity "equipment" as equipment {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT
+    * name : VARCHAR(150)
+    * type : VARCHAR(100)
+    * model : VARCHAR(100)
+    * serial_number : VARCHAR(50) <<UK>>
+    * status : VARCHAR(50)
+    sensor_external_id : VARCHAR(50)
+  }
+
+  entity "bpm_parameter_configs" as bpm_parameter_configs {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * equipment_id : BIGINT <<FK>>
+    * parameter_name : VARCHAR(100)
+    * min_value : DOUBLE
+    * max_value : DOUBLE
+    * unit : VARCHAR(20)
+  }
+
+  entity "maintenance_records" as maintenance_records {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * equipment_id : BIGINT <<FK>>
+    * maintenance_date : DATE
+    * technician_name : VARCHAR(150)
+    * description : VARCHAR(1000)
+    * type : VARCHAR(50)
+  }
+
+  equipment ||--o{ bpm_parameter_configs : "equipment_id"
+  equipment ||--o{ maintenance_records : "equipment_id"
+}
+
+package "Batch Context" {
+  entity "batches" as batches {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT
+    * product_id : BIGINT
+    * product_name : VARCHAR(150)
+    * batch_number : VARCHAR(50) <<UK>>
+    * quantity : DOUBLE
+    * unit : VARCHAR(20)
+    * status : VARCHAR(50)
+    * start_date : VARCHAR(30)
+    end_date : VARCHAR(30)
+    notes : VARCHAR(500)
+    environment_id : BIGINT
+    container_monitor_id : BIGINT
+    container_environment_id : BIGINT
+    container_assigned_by : BIGINT
+    container_assigned_at : DATETIME
+  }
+
+  entity "raw_material_usages" as raw_material_usages {
+    * <u>id</u> : BIGINT PK AUTO_INCREMENT
+    --
+    batch_id : BIGINT NOT NULL
+    raw_material_id : BIGINT NOT NULL
+    inventory_receipt_id : BIGINT NULL
+    raw_material_name : VARCHAR(150) NOT NULL
+    quantity_used : DOUBLE NOT NULL
+    unit : VARCHAR(20) NOT NULL
+    usage_date : VARCHAR(30) NOT NULL
+    stock_before : DECIMAL(19,3) NULL
+    stock_after : DECIMAL(19,3) NULL
+    created_at : DATETIME(6) NOT NULL
+    updated_at : DATETIME(6) NOT NULL
+  }
+
+  entity "digital_signatures" as digital_signatures {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * batch_id : BIGINT <<FK>>
+    * signed_by_user_id : BIGINT
+    * signature_hash : VARCHAR(255)
+    * signed_at : VARCHAR(30)
+  }
+
+  entity "rejection_records" as rejection_records {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * batch_id : BIGINT <<FK>>
+    * rejection_date : VARCHAR(30)
+    * reason : VARCHAR(500)
+  }
+
+  batches ||..o{ raw_material_usages : "batch_id"
+  batches ||--o{ digital_signatures : "batch_id"
+  batches ||--o{ rejection_records : "batch_id"
+}
+
+package "Tracking Context" {
+  entity "environmental_profiles" as environmental_profiles {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT
+    * scope : VARCHAR(30)
+    environment_id : BIGINT <<UK>>
+    device_id : BIGINT <<UK>>
+    * version : BIGINT
+    configured_by : BIGINT
+    configured_at : DATETIME
+  }
+
+  entity "environmental_profile_thresholds" as environmental_profile_thresholds {
+    * profile_id : BIGINT <<PK>> <<FK>>
+    * position : INT <<PK>>
+    --
+    * metric : VARCHAR(30)
+    normal_min : DOUBLE
+    normal_max : DOUBLE
+    critical_min : DOUBLE
+    critical_max : DOUBLE
+  }
+
+  entity "environmental_profile_actuation_rules" as environmental_profile_actuation_rules {
+    * profile_id : BIGINT <<PK>> <<FK>>
+    * position : INT <<PK>>
+    --
+    * metric : VARCHAR(30)
+    * state : VARCHAR(20)
+    * action : VARCHAR(30)
+  }
+
+  entity "telemetry_measurements" as telemetry_measurements {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    laboratory_id : BIGINT
+    environment_id : BIGINT
+    * equipment_id : BIGINT
+    * parameter_name : VARCHAR(120)
+    value : DOUBLE
+    text_value : VARCHAR(120)
+    * unit : VARCHAR(40)
+    * timestamp : VARCHAR(50)
+    measured_at : DATETIME
+    state : VARCHAR(20)
+    threshold_value : DOUBLE
+    profile_version : BIGINT
+  }
+
+  entity "actuation_events" as actuation_events {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT
+    * environment_id : BIGINT
+    * device_id : BIGINT
+    * action : VARCHAR(30)
+    trigger_metric : VARCHAR(30)
+    trigger_state : VARCHAR(20)
+    * result : VARCHAR(20)
+    * occurred_at : DATETIME
+    profile_version : BIGINT
+  }
+
+  environmental_profiles ||--o{ environmental_profile_thresholds : "profile_id"
+  environmental_profiles ||--o{ environmental_profile_actuation_rules : "profile_id"
+}
+
+package "Compliance and Alerts Context" {
+  entity "deviation_alerts" as deviation_alerts {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    laboratory_id : BIGINT
+    environment_id : BIGINT
+    origin : VARCHAR(20)
+    * equipment_id : BIGINT
+    batch_id : BIGINT
+    measurement_id : BIGINT
+    last_measurement_id : BIGINT
+    * parameter_name : VARCHAR(100)
+    * recorded_value : DOUBLE
+    * threshold_value : DOUBLE
+    * unit : VARCHAR(20)
+    * timestamp : VARCHAR(30)
+    * severity : VARCHAR(50)
+    * status : VARCHAR(50)
+    deviation_count : INT
+    last_detected_at : DATETIME
+    normalized_at : DATETIME
+    acknowledged_by : BIGINT
+    acknowledged_at : DATETIME
+    resolved_by : BIGINT
+    resolved_at : DATETIME
+    resolution_notes : VARCHAR(500)
+  }
+
+  entity "compliance_events" as compliance_events {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * related_entity_id : BIGINT
+    * event_type : VARCHAR(100)
+    * description : VARCHAR(1000)
+    * timestamp : VARCHAR(30)
+    resolved_by : BIGINT
+  }
+
+  entity "notification_preferences" as notification_preferences {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * user_id : BIGINT <<UK>>
+    * email_enabled : BOOLEAN
+    * in_app_enabled : BOOLEAN
+    * minimum_severity : VARCHAR(50)
+  }
+
+  entity "notifications" as notifications {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * recipient_user_id : BIGINT
+    * laboratory_id : BIGINT
+    * type : VARCHAR(40)
+    severity : VARCHAR(20)
+    * subject_id : BIGINT
+    environment_name : VARCHAR(120)
+    subject_name : VARCHAR(150)
+    parameter_name : VARCHAR(60)
+    recorded_value : DOUBLE
+    unit : VARCHAR(20)
+    actor_name : VARCHAR(150)
+    note : VARCHAR(500)
+    * occurred_at : DATETIME
+    read_at : DATETIME
+  }
+}
+
+package "Reporting and Analysis Context" {
+  entity "audit_reports" as audit_reports {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * laboratory_id : BIGINT
+    batch_id : BIGINT
+    equipment_id : BIGINT
+    * generated_by : BIGINT
+    * generated_by_name : VARCHAR(150)
+    * report_type : VARCHAR(50)
+    date_range_from : VARCHAR(30)
+    date_range_to : VARCHAR(30)
+    * file_path : VARCHAR(500)
+    * checksum : VARCHAR(255)
+    * generated_at : VARCHAR(30)
+  }
+
+  entity "audit_log_entries" as audit_log_entries {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * action : VARCHAR(50)
+    * entity_type : VARCHAR(100)
+    entity_id : BIGINT
+    * performed_by : BIGINT
+    * timestamp : VARCHAR(30)
+    details : VARCHAR(1000)
+  }
+
+}
+
+package "Subscription Context" {
+  entity "subscription_plans" as subscription_plans {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * code : VARCHAR(50)
+    * name : VARCHAR(100)
+    description : VARCHAR(500)
+    * amount : DECIMAL(10,2)
+    * currency : VARCHAR(3)
+    * billing_cycle : VARCHAR(50)
+    stripe_price_id : VARCHAR(150)
+    * max_users : INT
+    * max_equipment : INT
+    * active : BOOLEAN
+    --
+    <<UK>> code, billing_cycle
+    <<UK>> stripe_price_id
+  }
+
+  entity "subscriptions" as subscriptions {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * user_id : BIGINT
+    * laboratory_id : BIGINT
+    * plan_code : VARCHAR(50)
+    * billing_cycle : VARCHAR(50)
+    * status : VARCHAR(50)
+    stripe_customer_id : VARCHAR(150)
+    stripe_subscription_id : VARCHAR(150)
+    stripe_checkout_session_id : VARCHAR(150)
+    current_period_start : VARCHAR(50)
+    current_period_end : VARCHAR(50)
+    cancelled_at : VARCHAR(50)
+    cancelled_by : BIGINT
+    * cancel_at_period_end : BOOLEAN DEFAULT FALSE
+    --
+    <<UK>> stripe_subscription_id
+    <<UK>> stripe_checkout_session_id
+  }
+
+  entity "subscription_payments" as subscription_payments {
+    * id : BIGINT <<PK>>
+    --
+    * created_at : DATETIME
+    * updated_at : DATETIME
+    * subscription_id : BIGINT <<FK>>
+    * provider : VARCHAR(50)
+    provider_payment_id : VARCHAR(150)
+    stripe_checkout_session_id : VARCHAR(150)
+    * amount : DECIMAL(10,2)
+    * currency : VARCHAR(3)
+    * status : VARCHAR(50)
+    paid_at : VARCHAR(50)
+    --
+    <<UK>> provider_payment_id
+    <<UK>> stripe_checkout_session_id
+  }
+
+  subscription_plans ||..o{ subscriptions : "code + billing_cycle"
+  subscriptions ||--o{ subscription_payments : "subscription_id"
+}
+
+laboratories ||..o{ inventory_materials : laboratory_id
+laboratories ||..o{ inventory_receipts : laboratory_id
+laboratories ||..o{ inventory_movements : laboratory_id
+raw_materials |o..o| inventory_materials : legacy_id / explicit import
+batches |o..o{ inventory_movements : product_batch_id
+iam_users ||..o{ inventory_movements : actor_id
+inventory_receipts |o..o{ raw_material_usages : inventory_receipt_id
+equipment |o..o{ inventory_receipts : container_monitor_id
+equipment |o..o{ batches : container_monitor_id
+iam_users ||..o| profiles : user_id
+iam_users ||..o{ notifications : recipient_user_id
+
+note bottom of inventory_materials
+  Catalogue only: usableStock and physicalStock are calculated,
+  not stored columns. Legacy records remain in raw_materials.
+end note
+note bottom of inventory_receipts
+  QUARANTINED / RELEASED / OBSERVED / REJECTED.
+  Available stock belongs to each supplier receipt.
+  Units must match the catalogue; no implicit conversion.
+end note
+note bottom of inventory_movements
+  Append-only application history; signed amount.
+  operation_id is populated for consumptions (idempotent retries).
+  Receipt, movement and Batch usage share one transaction.
+  occurred_at is mapped from Instant (UTC).
+end note
+note bottom of raw_material_usages
+  inventory_receipt_id is NULL for legacy usage.
+  With a receipt, raw_material_id identifies inventory_materials;
+  otherwise it identifies legacy raw_materials.
+  stock_before / stock_after may be NULL for historical records.
+end note
+legend bottom
+  Inventory and Batch references drawn with dotted lines are logical ID links.
+  Current JPA mappings use scalar IDs, not declared foreign-key associations.
+  Columns and unique constraints are based on the source mappings, not a live DB export.
+endlegend
+
+@enduml

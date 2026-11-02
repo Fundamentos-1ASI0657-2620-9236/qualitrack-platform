@@ -1,0 +1,733 @@
+@startuml ra-backend-diagram
+
+title QualiTrack - Reporting and Analysis Backend Class Diagram
+
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+
+package "shared" <<External>> {
+  abstract class AbstractDomainAggregateRoot
+  abstract class AuditableAbstractPersistenceEntity
+  class ApplicationError
+  class Result
+  class ResponseEntityAssembler
+  class ErrorResponseAssembler
+  interface CurrentUser
+}
+
+package "spring" <<External>> {
+  interface JpaRepository
+  interface AttributeConverter
+}
+
+package "java.time" <<External>> {
+  class Clock
+}
+
+package "external bounded contexts" <<External>> {
+  interface BatchRepository
+  interface DeviationAlertRepository
+  interface EquipmentRepository
+  interface BpmParameterConfigRepository
+  interface MaintenanceRepository
+  interface RawMaterialUsageRepository
+  interface LaboratoryRepository
+  interface LaboratoryContextFacade
+  interface TrackingContextFacade
+  interface ComplianceContextFacade
+  interface EquipmentContextFacade
+  interface InventoryContextFacade
+  interface BatchContextFacade
+}
+
+package "ra.domain.model.valueobjects" {
+  enum AuditAction {
+    CREATE
+    UPDATE
+    DELETE
+    RELEASE
+    REJECT
+    APPROVE
+    REGISTER
+    REMOVE
+    EXPORT
+    GENERATE
+    LOGIN
+    LOGOUT
+    SYSTEM
+  }
+
+  enum KpiMetricStatus {
+    ON_TRACK
+    AT_RISK
+    CRITICAL
+    UNKNOWN
+  }
+
+  enum ReportFormat {
+    PDF
+    CSV
+  }
+
+  enum ReportType {
+    BATCH_TRACEABILITY
+    COMPLIANCE_PERIOD
+    EQUIPMENT_LOG
+    KPI_SUMMARY
+    INVENTORY
+  }
+
+  enum TrendDirection {
+    INCREASING
+    DECREASING
+    STABLE
+  }
+
+  class ReportingPeriod <<record>> {
+    + from: Instant
+    + to: Instant
+    + {static} DEFAULT_LENGTH: Duration = 7 days
+    + {static} MAX_INDICATOR_LENGTH: Duration = 31 days
+    + {static} forIndicators(from, to, now): ReportingPeriod
+    + {static} ofDays(startDate, endDate, zone): ReportingPeriod
+    + contains(moment: Instant): boolean
+  }
+
+  class EnvironmentalReading <<record>> {
+    + deviceId: Long
+    + metric: String
+    + value: Double
+    + unit: String
+    + state: String
+    + measuredAt: Instant
+    + isNumeric(): boolean
+    + isEvaluated(): boolean
+    + severityRank(): int
+  }
+
+  class MeasurementSummary <<record>> {
+    + environmentId: Long
+    + deviceId: Long
+    + metric: String
+    + unit: String
+    + readings: int
+    + average: Double
+    + minimum: Double
+    + maximum: Double
+    + firstMeasuredAt: Instant
+    + lastMeasuredAt: Instant
+    + {static} summarize(environmentId, readings): List<MeasurementSummary>
+  }
+}
+
+MeasurementSummary ..> EnvironmentalReading
+
+package "ra.domain.model.commands" {
+  class GenerateBatchReportCommand <<record>>
+  class GenerateComplianceReportCommand <<record>>
+  class GenerateInventoryReportCommand <<record>>
+  class ExportEquipmentLogCommand <<record>>
+  class RecordAuditLogEntryCommand <<record>>
+}
+
+package "ra.domain.model.queries" {
+  class GetKpiDashboardByLaboratoryIdQuery <<record>> {
+    + laboratoryId: Long
+    + environmentId: Long
+    + period: ReportingPeriod
+  }
+  class GetDeviationTrendsByEnvironmentQuery <<record>> {
+    + laboratoryId: Long
+    + environmentId: Long
+    + period: ReportingPeriod
+  }
+  class GetAuditLogQuery <<record>>
+  class GetAuditReportByIdQuery <<record>>
+  class GetAuditReportsByLaboratoryIdQuery <<record>>
+  class GetAuditReportsByBatchIdQuery <<record>>
+  class GetAuditReportsByEquipmentIdQuery <<record>>
+}
+
+package "ra.domain.model.aggregates" {
+  class AuditReport {
+    - id: Long
+    - laboratoryId: Long
+    - batchId: Long
+    - equipmentId: Long
+    - generatedBy: Long
+    - generatedByName: String
+    - reportType: ReportType
+    - dateRangeFrom: String
+    - dateRangeTo: String
+    - filePath: String
+    - checksum: String
+    - generatedAt: String
+    + computeChecksum(content: byte[]): String
+    + isImmutable(): boolean
+    + isBatchReport(): boolean
+    + isEquipmentReport(): boolean
+  }
+
+  class KpiDashboard {
+    - id: Long
+    - laboratoryId: Long
+    - timestamp: String
+    - overallHealthScore: Double
+    - period: ReportingPeriod
+    - metrics: List<KpiMetric>
+    - measurementSummaries: List<MeasurementSummary>
+    + hasCriticalMetrics(): boolean
+    + hasAtRiskMetrics(): boolean
+  }
+}
+
+package "ra.domain.model.entities" {
+  class AuditLogEntry {
+    - id: Long
+    - action: AuditAction
+    - entityType: String
+    - entityId: Long
+    - performedBy: Long
+    - timestamp: String
+    - details: String
+  }
+
+  class DeviationTrend {
+    - id: Long
+    - parameterName: String
+    - equipmentId: Long
+    - environmentId: Long
+    - unit: String
+    - trendDirection: TrendDirection
+    - evaluatedReadings: int
+    - timeInRangePercent: Double
+    - deviationCount: int
+    - criticalDeviationCount: int
+    - dataPoints: List<TrendDataPoint>
+    + {static} fromReadings(environmentId, deviceId, metric, unit, readings): DeviationTrend
+  }
+
+  class KpiMetric {
+    - id: Long
+    - name: String
+    - value: Double
+    - unit: String
+    - targetValue: Double
+    - status: KpiMetricStatus
+    - recordedAt: String
+  }
+
+  class TrendDataPoint {
+    - timestamp: String
+    - recordedValue: Double
+    - upperThreshold: Double
+    - lowerThreshold: Double
+    - state: String
+    + isDeviation(): boolean
+  }
+}
+
+AuditReport --|> AbstractDomainAggregateRoot
+KpiDashboard --|> AbstractDomainAggregateRoot
+
+AuditReport --> ReportType
+KpiDashboard *-- KpiMetric
+KpiDashboard --> ReportingPeriod
+KpiDashboard *-- MeasurementSummary
+note right of KpiDashboard
+  Calculated on request from the persisted readings (US93, TS81);
+  it is not stored. Counts are the current records of the laboratory.
+end note
+KpiMetric --> KpiMetricStatus
+AuditLogEntry --> AuditAction
+DeviationTrend --> TrendDirection
+DeviationTrend *-- TrendDataPoint
+DeviationTrend ..> EnvironmentalReading
+note right of DeviationTrend
+  One per device, variable and unit with numeric readings (US94, TS82).
+  Time in range: each evaluated reading keeps its condition until the next;
+  NORMAL time over the time between the first and last evaluated reading.
+  Deviation: a reading worse than the previous one (critical when it enters
+  CRITICAL). Calculated on request; not stored.
+end note
+GetKpiDashboardByLaboratoryIdQuery --> ReportingPeriod
+GetDeviationTrendsByEnvironmentQuery --> ReportingPeriod
+
+GenerateBatchReportCommand --> ReportFormat
+GenerateComplianceReportCommand --> ReportFormat
+GenerateInventoryReportCommand --> ReportFormat
+ExportEquipmentLogCommand --> ReportFormat
+RecordAuditLogEntryCommand --> AuditAction
+
+package "ra.domain.model.events" {
+  class AuditLogEntryRecordedEvent <<record>>
+  class AuditReportGeneratedEvent <<record>>
+}
+
+AuditLogEntryRecordedEvent --> AuditAction
+AuditReportGeneratedEvent --> ReportType
+
+package "ra.domain.repositories" {
+  interface AuditLogRepository {
+    + findById(id: Long): Optional<AuditLogEntry>
+    + findAll(): List<AuditLogEntry>
+    + findAllByEquipmentId(equipmentId: Long): List<AuditLogEntry>
+    + findAllByBatchId(batchId: Long): List<AuditLogEntry>
+    + findAllByPerformedBy(performedBy: Long): List<AuditLogEntry>
+    + findAllByAction(action: AuditAction): List<AuditLogEntry>
+    + findAllByDateRange(dateFrom: String, dateTo: String): List<AuditLogEntry>
+    + save(auditLogEntry: AuditLogEntry): AuditLogEntry
+    + existsById(id: Long): boolean
+  }
+
+  interface AuditReportRepository {
+    + findById(id: Long): Optional<AuditReport>
+    + findAllByLaboratoryId(laboratoryId: Long): List<AuditReport>
+    + findAllByBatchId(batchId: Long): List<AuditReport>
+    + findAllByEquipmentId(equipmentId: Long): List<AuditReport>
+    + findAllByReportType(reportType: ReportType): List<AuditReport>
+    + save(auditReport: AuditReport): AuditReport
+    + existsById(id: Long): boolean
+  }
+
+}
+
+AuditLogRepository --> AuditLogEntry
+AuditReportRepository --> AuditReport
+
+package "ra.domain.exceptions" {
+  class AuditLogEntryNotFoundException
+  class AuditReportNotFoundException
+  class ImmutableAuditReportException
+  class InvalidReportDateRangeException
+  class ReportGenerationException
+}
+
+package "ra.application.commandservices" {
+  interface RaCommandService {
+    + handle(command: GenerateBatchReportCommand): Result<AuditReport, ApplicationError>
+    + handle(command: GenerateComplianceReportCommand): Result<AuditReport, ApplicationError>
+    + handle(command: GenerateInventoryReportCommand): Result<AuditReport, ApplicationError>
+    + handle(command: ExportEquipmentLogCommand): Result<AuditReport, ApplicationError>
+  }
+
+  interface AuditLogCommandService {
+    + handle(command: RecordAuditLogEntryCommand): Result<AuditLogEntry, ApplicationError>
+  }
+}
+
+package "ra.application.queryservices" {
+  interface RaQueryService {
+    + handle(query: GetKpiDashboardByLaboratoryIdQuery): Optional<KpiDashboard>
+    + handle(query: GetDeviationTrendsByEnvironmentQuery): Optional<List<DeviationTrend>>
+    + handle(query: GetAuditLogQuery): List<AuditLogEntry>
+    + handle(query: GetStaffActivityQuery): Optional<List<AuditLogEntry>>
+    + handle(query: GetAuditReportByIdQuery): Optional<AuditReport>
+    + handle(query: GetAuditReportsByLaboratoryIdQuery): List<AuditReport>
+    + handle(query: GetAuditReportsByBatchIdQuery): List<AuditReport>
+    + handle(query: GetAuditReportsByEquipmentIdQuery): List<AuditReport>
+  }
+
+  interface ReportDocumentQueryService {
+    + handle(query: GetReportDocumentByIdQuery): Optional<ReportDocument>
+  }
+}
+
+RaCommandService ..> Result
+RaCommandService ..> ApplicationError
+AuditLogCommandService ..> Result
+AuditLogCommandService ..> ApplicationError
+
+package "ra.application.internal.commandservices" {
+  class RaCommandServiceImpl
+  class AuditLogCommandServiceImpl
+}
+
+RaCommandServiceImpl ..|> RaCommandService
+RaCommandServiceImpl --> AuditReportRepository
+RaCommandServiceImpl --> AuditLogRepository
+
+AuditLogCommandServiceImpl ..|> AuditLogCommandService
+AuditLogCommandServiceImpl --> AuditLogRepository
+
+package "ra.application.internal.queryservices" {
+  class RaQueryServiceImpl
+}
+
+RaQueryServiceImpl ..|> RaQueryService
+RaQueryServiceImpl --> AuditLogRepository
+RaQueryServiceImpl --> AuditReportRepository
+
+package "ra.application.internal.outboundservices.acl" {
+  class RaExternalTrackingService {
+    + findReadings(laboratoryId, environmentId, period: ReportingPeriod): List<EnvironmentalReading>
+    + findActuations(laboratoryId, environmentId, period: ReportingPeriod): List<ActuationReference>
+  }
+
+  class RaExternalComplianceService {
+    + findEnvironmentAlerts(laboratoryId, environmentId, period: ReportingPeriod): List<AlertReference>
+  }
+
+  class RaExternalEquipmentService {
+    + deviceNames(laboratoryId: Long): Map<Long, String>
+  }
+
+  class RaExternalInventoryService {
+    + findInventory(laboratoryId, environmentId): List<InventoryMaterial>
+  }
+
+  class RaExternalBatchService {
+    + findTraceability(batchId: Long): Optional<TraceabilityReference>
+  }
+
+  class RaExternalLaboratoryService {
+    + existsLaboratoryById(laboratoryId: Long): boolean
+    + findEnvironments(laboratoryId: Long): List<EnvironmentReference>
+    + findEnvironment(laboratoryId, environmentId): Optional<EnvironmentReference>
+    + findStaffAccount(laboratoryId: Long, staffId: Long): Optional<Optional<Long>>
+  }
+
+  class RaOperationalDataService {
+    + dashboard(laboratoryId: Long): KpiDashboard
+    + laboratoryName(laboratoryId: Long): String
+    + batch(id: Long): Batch
+    + batchAlerts(batchId: Long): List<DeviationAlert>
+    + batchReport(...): BatchReportData
+    + equipment(id: Long): Equipment
+    + equipmentReport(...): EquipmentReportData
+  }
+}
+
+RaExternalTrackingService --> TrackingContextFacade
+RaExternalTrackingService ..> EnvironmentalReading
+RaExternalComplianceService --> ComplianceContextFacade
+RaExternalEquipmentService --> EquipmentContextFacade
+RaExternalInventoryService --> InventoryContextFacade
+RaExternalBatchService --> BatchContextFacade
+RaExternalLaboratoryService --> LaboratoryContextFacade
+RaOperationalDataService --> EquipmentRepository
+RaOperationalDataService --> BatchRepository
+RaOperationalDataService --> DeviationAlertRepository
+RaOperationalDataService --> BpmParameterConfigRepository
+RaOperationalDataService --> RawMaterialUsageRepository
+RaOperationalDataService --> LaboratoryRepository
+RaOperationalDataService --> MaintenanceRepository
+note bottom of RaOperationalDataService
+  Operational counts, batch base data and the equipment log still read the
+  repositories of the other contexts; the indicators and the environmental,
+  inventory and traceability data are read through their facades.
+end note
+
+package "ra.application.internal.outboundservices" {
+  interface ReportDocumentWriter {
+    + write(format, title, rows): byte[]
+    + writeBatchPdf(data: BatchReportData): byte[]
+    + writeCompliance(format, data: ComplianceReportData): byte[]
+    + writeEquipment(format, data: EquipmentReportData): byte[]
+    + writeInventory(format, data: InventoryReportData): byte[]
+  }
+  class BatchReportData <<record>>
+  class ComplianceReportData <<record>> {
+    + environments: List<EnvironmentSection>
+    + readings(): int
+    + deviations(): int
+    + alerts(): int
+    + actions(): int
+  }
+  class EquipmentReportData <<record>>
+  class InventoryReportData <<record>> {
+    + businessDate: String
+    + environments: List<EnvironmentInventory>
+  }
+}
+
+ReportDocumentWriter ..> BatchReportData
+ReportDocumentWriter ..> ComplianceReportData
+ReportDocumentWriter ..> EquipmentReportData
+ReportDocumentWriter ..> InventoryReportData
+
+RaCommandServiceImpl --> RaOperationalDataService
+RaCommandServiceImpl --> RaExternalLaboratoryService
+RaCommandServiceImpl --> RaExternalTrackingService
+RaCommandServiceImpl --> RaExternalComplianceService
+RaCommandServiceImpl --> RaExternalEquipmentService
+RaCommandServiceImpl --> RaExternalInventoryService
+RaCommandServiceImpl --> RaExternalBatchService
+RaCommandServiceImpl --> ReportDocumentWriter
+RaCommandServiceImpl --> Clock : reportingClock
+note bottom of RaCommandServiceImpl
+  Environmental report (US95): readings, indicators, alerts and actions of each
+  environment in whole calendar days (America/Lima). Inventory report (US97):
+  materials and lots of the laboratory or of one environment on the business date.
+  Batch report (US96): materials and lots, equipment, staff, container, decision.
+end note
+RaQueryServiceImpl --> RaOperationalDataService
+RaQueryServiceImpl --> RaExternalLaboratoryService
+RaQueryServiceImpl --> RaExternalTrackingService
+
+package "ra.infrastructure.configuration" {
+  class RaConfiguration {
+    + reportingClock(): Clock
+  }
+}
+
+package "ra.infrastructure.documents" {
+  class ReportDocumentWriterImpl
+  abstract class AbstractReportPdfRenderer
+  class BatchReportPdfRenderer
+  class PeriodReportPdfRenderer
+  class InventoryReportPdfRenderer
+}
+
+ReportDocumentWriterImpl ..|> ReportDocumentWriter
+ReportDocumentWriterImpl --> BatchReportPdfRenderer
+ReportDocumentWriterImpl --> PeriodReportPdfRenderer
+ReportDocumentWriterImpl --> InventoryReportPdfRenderer
+BatchReportPdfRenderer --|> AbstractReportPdfRenderer
+PeriodReportPdfRenderer --|> AbstractReportPdfRenderer
+InventoryReportPdfRenderer --|> AbstractReportPdfRenderer
+
+package "ra.application.internal.eventhandlers" {
+  class AuditLogEntryRecordedEventHandler
+  class AuditReportGeneratedEventHandler
+  class BatchAuditEventHandler
+  class CaAuditEventHandler
+  class EquipmentAuditEventHandler
+  class InventoryAuditEventHandler
+  class LaboratoryAuditEventHandler
+  class TrackingAuditEventHandler
+}
+
+AuditLogEntryRecordedEventHandler ..> AuditLogEntryRecordedEvent
+AuditReportGeneratedEventHandler ..> AuditReportGeneratedEvent
+
+BatchAuditEventHandler --> AuditLogCommandService
+note bottom of BatchAuditEventHandler
+  BatchStoredInContainerIntegrationEvent -> UPDATE BATCH audit log entry
+  (container where the product batch is stored, US78).
+  BatchStartedIntegrationEvent -> UPDATE BATCH audit log entry
+  (first raw material consumption, US75).
+end note
+CaAuditEventHandler --> AuditLogCommandService
+note bottom of CaAuditEventHandler
+  DeviationAlert created -> REGISTER; escalated (higher severity of an open
+  incident), acknowledged and resolved -> UPDATE DEVIATION_ALERT.
+end note
+EquipmentAuditEventHandler --> AuditLogCommandService
+LaboratoryAuditEventHandler --> AuditLogCommandService
+TrackingAuditEventHandler --> AuditLogCommandService
+note bottom of TrackingAuditEventHandler
+  Tracking EnvironmentalProfileUpdatedIntegrationEvent
+  -> UPDATE ENVIRONMENTAL_PROFILE audit log entry.
+end note
+
+package "ra.application.acl" {
+  class RaContextFacadeImpl
+}
+
+package "ra.interfaces.acl" {
+  interface RaContextFacade
+}
+
+RaContextFacadeImpl ..|> RaContextFacade
+RaContextFacadeImpl --> AuditLogCommandService
+
+package "ra.interfaces.events" {
+  class AuditLogEntryRecordedIntegrationEvent <<record>>
+  class AuditReportGeneratedIntegrationEvent <<record>>
+}
+
+AuditLogEntryRecordedIntegrationEvent --> AuditAction
+AuditReportGeneratedIntegrationEvent --> ReportType
+
+AuditLogEntryRecordedEventHandler ..> AuditLogEntryRecordedIntegrationEvent
+AuditReportGeneratedEventHandler ..> AuditReportGeneratedIntegrationEvent
+
+package "ra.infrastructure.persistence.jpa.entities" {
+  class AuditLogEntryPersistenceEntity
+  class AuditReportPersistenceEntity
+}
+
+AuditLogEntryPersistenceEntity --|> AuditableAbstractPersistenceEntity
+AuditReportPersistenceEntity --|> AuditableAbstractPersistenceEntity
+
+AuditLogEntryPersistenceEntity --> AuditAction
+AuditReportPersistenceEntity --> ReportType
+
+package "ra.infrastructure.persistence.jpa.repositories" {
+  interface AuditLogEntryPersistenceRepository
+  interface AuditReportPersistenceRepository
+}
+
+AuditLogEntryPersistenceRepository --|> JpaRepository
+AuditReportPersistenceRepository --|> JpaRepository
+
+AuditLogEntryPersistenceRepository --> AuditLogEntryPersistenceEntity
+AuditReportPersistenceRepository --> AuditReportPersistenceEntity
+
+package "ra.infrastructure.persistence.jpa.assemblers" {
+  class AuditLogEntryPersistenceAssembler
+  class AuditReportPersistenceAssembler
+}
+
+AuditLogEntryPersistenceAssembler ..> AuditLogEntry
+AuditReportPersistenceAssembler ..> AuditReport
+
+package "ra.infrastructure.persistence.jpa.adapters" {
+  class AuditLogRepositoryImpl
+  class AuditReportRepositoryImpl
+}
+
+AuditLogRepositoryImpl ..|> AuditLogRepository
+AuditReportRepositoryImpl ..|> AuditReportRepository
+
+AuditLogRepositoryImpl --> AuditLogEntryPersistenceRepository
+AuditLogRepositoryImpl --> AuditLogEntryPersistenceAssembler
+AuditReportRepositoryImpl --> AuditReportPersistenceRepository
+AuditReportRepositoryImpl --> AuditReportPersistenceAssembler
+
+package "ra.infrastructure.persistence.jpa.converters" {
+  class AuditActionPersistenceConverter
+  class ReportFormatPersistenceConverter
+  class ReportTypePersistenceConverter
+}
+
+AuditActionPersistenceConverter ..|> AttributeConverter
+ReportFormatPersistenceConverter ..|> AttributeConverter
+ReportTypePersistenceConverter ..|> AttributeConverter
+
+AuditActionPersistenceConverter ..> AuditAction
+ReportFormatPersistenceConverter ..> ReportFormat
+ReportTypePersistenceConverter ..> ReportType
+
+package "ra.interfaces.rest.resources" {
+  class AuditLogEntryResource <<record>>
+  class AuditReportResource <<record>>
+  class DeviationTrendResource <<record>>
+  class ExportEquipmentLogResource <<record>>
+  class GenerateBatchReportResource <<record>>
+  class GenerateComplianceReportResource <<record>>
+  class GenerateInventoryReportResource <<record>>
+  class KpiDashboardResource <<record>>
+  class KpiMetricResource <<record>>
+  class MeasurementSummaryResource <<record>>
+  class TrendDataPointResource <<record>>
+}
+
+package "ra.interfaces.rest.transform" {
+  class AuditLogEntryResourceFromEntityAssembler
+  class AuditReportResourceFromEntityAssembler
+  class DeviationTrendResourceFromEntityAssembler
+  class ExportEquipmentLogCommandFromResourceAssembler
+  class GenerateBatchReportCommandFromResourceAssembler
+  class GenerateComplianceReportCommandFromResourceAssembler
+  class GenerateInventoryReportCommandFromResourceAssembler
+  class ReportingPeriodAssembler {
+    + {static} toIndicatorPeriod(from: String, to: String): ReportingPeriod
+  }
+  class KpiDashboardResourceFromEntityAssembler
+  class KpiMetricResourceFromEntityAssembler
+  class TrendDataPointResourceFromEntityAssembler
+  class ReportResponseAssembler {
+    + {static} toCreatedResponse(result): ResponseEntity
+    + {static} toUriFromEntity(report): URI
+  }
+}
+
+AuditLogEntryResourceFromEntityAssembler ..> AuditLogEntry
+AuditReportResourceFromEntityAssembler ..> AuditReport
+DeviationTrendResourceFromEntityAssembler ..> DeviationTrend
+ExportEquipmentLogCommandFromResourceAssembler ..> ExportEquipmentLogCommand
+GenerateBatchReportCommandFromResourceAssembler ..> GenerateBatchReportCommand
+GenerateComplianceReportCommandFromResourceAssembler ..> GenerateComplianceReportCommand
+GenerateInventoryReportCommandFromResourceAssembler ..> GenerateInventoryReportCommand
+ReportingPeriodAssembler ..> ReportingPeriod
+KpiDashboardResourceFromEntityAssembler ..> KpiDashboard
+KpiMetricResourceFromEntityAssembler ..> KpiMetric
+TrendDataPointResourceFromEntityAssembler ..> TrendDataPoint
+ReportResponseAssembler ..> AuditReportResourceFromEntityAssembler
+ReportResponseAssembler ..> ResponseEntityAssembler
+
+package "ra.interfaces.rest" {
+  class BatchAuditLogController
+  class EquipmentAuditLogController
+  class StaffAuditLogController
+  class DeviationTrendController
+  class KpiDashboardController
+  class BatchReportController
+  class LaboratoryReportController
+  class EquipmentReportController
+  class ReportController
+}
+
+BatchAuditLogController --> RaQueryService
+BatchAuditLogController ..> AuditLogEntryResourceFromEntityAssembler
+EquipmentAuditLogController --> RaQueryService
+EquipmentAuditLogController ..> AuditLogEntryResourceFromEntityAssembler
+StaffAuditLogController --> RaQueryService
+StaffAuditLogController ..> AuditLogEntryResourceFromEntityAssembler
+note bottom of StaffAuditLogController
+  GET /api/v1/laboratories/{laboratoryId}/staff/{staffId}/audit-logs
+  Operations registered with the account of the staff member, newest first
+  (quality managers, administrators and auditors).
+end note
+note bottom of EquipmentAuditLogController
+  GET /api/v1/batches/{batchId}/audit-logs (TS80)
+  GET /api/v1/laboratories/{laboratoryId}/equipments/{equipmentId}/audit-logs
+  Entries are recorded by the platform; there is no POST.
+end note
+note bottom of InventoryAuditEventHandler
+  RawMaterialSaved and InventoryMovementRecorded (RECEIPT, REVIEW) of Inventory;
+  consumptions are audited as raw material usages of the batch.
+end note
+
+DeviationTrendController --> RaQueryService
+DeviationTrendController ..> DeviationTrendResourceFromEntityAssembler
+DeviationTrendController ..> ReportingPeriodAssembler
+note bottom of DeviationTrendController
+  GET /api/v1/laboratories/{laboratoryId}/environments/{environmentId}/deviation-trends?from&to (TS82)
+  Period of at most 31 days (last 7 days by default); 400 for an invalid period,
+  404 when the environment is not in the laboratory.
+end note
+
+KpiDashboardController --> RaQueryService
+KpiDashboardController ..> KpiDashboardResourceFromEntityAssembler
+KpiDashboardController ..> ErrorResponseAssembler
+KpiDashboardController ..> ReportingPeriodAssembler
+note bottom of KpiDashboardController
+  GET /api/v1/laboratories/{laboratoryId}/kpi-dashboards?from&to&environmentId (TS81)
+  Period of at most 31 days (last 7 days by default).
+end note
+
+BatchReportController --> RaCommandService
+BatchReportController --> RaQueryService
+BatchReportController ..> GenerateBatchReportCommandFromResourceAssembler
+BatchReportController ..> ReportResponseAssembler
+BatchReportController ..> CurrentUser
+LaboratoryReportController --> RaCommandService
+LaboratoryReportController --> RaQueryService
+LaboratoryReportController ..> GenerateComplianceReportCommandFromResourceAssembler
+LaboratoryReportController ..> GenerateInventoryReportCommandFromResourceAssembler
+LaboratoryReportController ..> ReportResponseAssembler
+LaboratoryReportController ..> CurrentUser
+EquipmentReportController --> RaCommandService
+EquipmentReportController ..> ExportEquipmentLogCommandFromResourceAssembler
+EquipmentReportController ..> ReportResponseAssembler
+EquipmentReportController ..> CurrentUser
+ReportController --> RaQueryService
+ReportController --> ReportDocumentQueryService
+ReportController ..> AuditReportResourceFromEntityAssembler
+ReportController ..> ErrorResponseAssembler
+note bottom of ReportController
+  POST /api/v1/batches/{batchId}/reports                          (TS84)
+  POST /api/v1/laboratories/{laboratoryId}/compliance-reports     (TS83)
+  POST /api/v1/laboratories/{laboratoryId}/inventory/reports      (TS85)
+  POST .../environments/{environmentId}/equipments/{equipmentId}/log-reports (TS86)
+       201 + Location /api/v1/reports/{reportId}; the authenticated user requests it
+  GET  /api/v1/reports/{reportId} and /api/v1/reports/{reportId}/content (TS87)
+  GET  /api/v1/batches/{batchId}/reports, /api/v1/laboratories/{laboratoryId}/reports
+end note
+
+@enduml

@@ -1,0 +1,601 @@
+@startuml equipment-backend-diagram
+
+title QualiTrack - Equipment Backend Class Diagram
+
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam linetype ortho
+
+package "shared" <<External>> {
+  abstract class AbstractDomainAggregateRoot
+  abstract class AuditableAbstractPersistenceEntity
+  class ApplicationError
+  class Result
+  class ResponseEntityAssembler {
+    + toCreatedResponseEntityFromResult(result, assembler, identifier)
+    + toCreatedResponseEntityAtLocation(result, assembler, location)
+  }
+  interface CurrentUser
+  interface TenantResourceLookup
+}
+
+package "spring" <<External>> {
+  class ApplicationEventPublisher
+  interface JpaRepository
+  interface AttributeConverter
+  class Clock
+}
+
+package "laboratory.interfaces.acl" <<External>> {
+  interface LaboratoryContextFacade {
+    + existsLaboratoryById(labId): boolean
+    + existsEnvironment(laboratoryId, environmentId): boolean
+  }
+}
+
+package "equipment.domain.model.valueobjects" {
+  class EquipmentType <<record>> {
+    + name: String
+  }
+
+  class CriticalVariable <<record>> {
+    + name: String
+  }
+
+  class DeviceId <<record>> {
+    + value: String
+  }
+
+  enum EquipmentStatus {
+    OPERATIONAL
+    MAINTENANCE
+    OUT_OF_SERVICE
+    INACTIVE
+  }
+
+  enum IotDeviceType {
+    ENVIRONMENTAL_DEVICE
+    CONTAINER_MONITOR
+  }
+
+  enum MaintenanceType {
+    PREVENTIVE
+    CORRECTIVE
+    CALIBRATION
+    INSPECTION
+    OTHER
+  }
+
+  enum DeviationSeverity {
+    LOW
+    MINOR
+    MAJOR
+    CRITICAL
+  }
+}
+
+package "equipment.domain.model.aggregates" {
+  class Equipment {
+    - id: Long
+    - labId: Long
+    - environmentId: Long
+    - name: String
+    - type: EquipmentType
+    - model: String
+    - serialNumber: String
+    - status: EquipmentStatus
+    - sensorExternalId: DeviceId
+    - deviceType: IotDeviceType
+    - firmwareVersion: String
+    + Equipment(command: RegisterEquipmentCommand)
+    + Equipment(command: RegisterIotDeviceCommand)
+    + isIotDevice(): boolean
+    + isDeviceOfType(type: IotDeviceType): boolean
+    + belongsTo(laboratoryId: Long): boolean
+    + isLocatedIn(laboratoryId: Long, environmentId: Long): boolean
+    + assignToEnvironment(environmentId: Long): void
+    + changeStatus(status, reason, changedByUserId, changedAt): EquipmentStatusChange
+    + linkSensor(sensorExternalId: String): void
+    + updateStatus(newStatus: EquipmentStatus): void
+  }
+
+  class MaintenanceRecord {
+    - id: Long
+    - equipmentId: Long
+    - environmentId: Long
+    - maintenanceDate: LocalDate
+    - technicianName: String
+    - technicianStaffId: Long
+    - description: String
+    - type: MaintenanceType
+    + MaintenanceRecord(command: RegisterMaintenanceCommand, technicianName: String, today: LocalDate)
+  }
+}
+
+package "equipment.domain.model.entities" {
+  class BpmParameterConfig {
+    - id: Long
+    - equipmentId: Long
+    - parameterName: CriticalVariable
+    - minValue: Double
+    - maxValue: Double
+    - unit: String
+    + updateLimits(newMinValue: Double, newMaxValue: Double): void
+  }
+
+  class EquipmentStatusChange {
+    - id: Long
+    - equipmentId: Long
+    - environmentId: Long
+    - previousStatus: EquipmentStatus
+    - newStatus: EquipmentStatus
+    - reason: String
+    - changedByUserId: Long
+    - changedAt: Instant
+  }
+}
+
+Equipment --|> AbstractDomainAggregateRoot
+MaintenanceRecord --|> AbstractDomainAggregateRoot
+
+Equipment *-- EquipmentType
+Equipment *-- EquipmentStatus
+Equipment *-- DeviceId
+Equipment *-- IotDeviceType
+Equipment ..> EquipmentStatusChange : creates
+MaintenanceRecord *-- MaintenanceType
+BpmParameterConfig *-- CriticalVariable
+note right of Equipment
+  An IoT device is an equipment with a device type and the
+  identity (sensorExternalId) that Edge uses to recognise it.
+  An environment has at most one environmental device.
+end note
+
+package "equipment.domain.model.commands" {
+  class RegisterEquipmentCommand <<record>> {
+    + labId: Long
+    + name: String
+    + type: String
+    + model: String
+    + serialNumber: String
+  }
+
+  class RegisterIotDeviceCommand <<record>> {
+    + laboratoryId: Long
+    + deviceType: IotDeviceType
+    + name: String
+    + sensorExternalId: String
+    + serialNumber: String
+    + model: String
+    + firmwareVersion: String
+  }
+
+  class AssignEquipmentToEnvironmentCommand <<record>> {
+    + laboratoryId: Long
+    + environmentId: Long
+    + equipmentId: Long
+    + requiredDeviceType: IotDeviceType
+  }
+
+  class ChangeEquipmentStatusCommand <<record>> {
+    + laboratoryId: Long
+    + environmentId: Long
+    + equipmentId: Long
+    + status: EquipmentStatus
+    + reason: String
+  }
+
+  class LinkSensorCommand <<record>> {
+    + equipmentId: Long
+    + sensorExternalId: String
+    + sensorType: String
+  }
+
+  class ConfigureBpmParametersCommand <<record>> {
+    + equipmentId: Long
+    + parameterName: String
+    + minValue: Double
+    + maxValue: Double
+    + unit: String
+  }
+
+  class RegisterMaintenanceCommand <<record>> {
+    + laboratoryId: Long
+    + environmentId: Long
+    + equipmentId: Long
+    + maintenanceDate: String
+    + technicianStaffId: Long
+    + description: String
+    + type: String
+  }
+}
+
+package "equipment.domain.model.queries" {
+  class GetEquipmentByIdQuery <<record>> {
+    + laboratoryId: Long
+    + equipmentId: Long
+  }
+  class GetEquipmentByLabIdQuery <<record>>
+  class GetEquipmentByDeviceIdQuery <<record>>
+  class GetCalibrationAlertsByLabIdQuery <<record>>
+  class GetBpmParameterConfigsByEquipmentIdQuery <<record>>
+  class GetMaintenanceByEquipmentIdQuery <<record>> {
+    + laboratoryId: Long
+    + environmentId: Long
+    + equipmentId: Long
+  }
+}
+
+package "equipment.domain.model.events" {
+  class EquipmentRegisteredEvent <<record>>
+  class EquipmentAssignedToEnvironmentEvent <<record>>
+  class EquipmentStatusChangedEvent <<record>>
+  class SensorLinkedEvent <<record>>
+  class BpmParameterConfiguredEvent <<record>>
+  class CalibrationExpiredEvent <<record>>
+  class MaintenanceRegisteredEvent <<record>>
+}
+
+package "equipment.domain.repositories" {
+  interface EquipmentRepository {
+    + existsBySerialNumber(serialNumber): boolean
+    + existsBySensorExternalId(sensorExternalId: DeviceId): boolean
+    + existsOtherDeviceInEnvironment(environmentId, deviceType, equipmentId): boolean
+  }
+  interface EquipmentStatusChangeRepository
+  interface BpmParameterConfigRepository
+  interface MaintenanceRepository
+}
+
+package "equipment.domain.exceptions" {
+  class EquipmentNotFoundException
+  class MaintenanceNotFoundException
+}
+
+package "equipment.application.commandservices" {
+  interface EquipmentCommandService {
+    + handle(RegisterEquipmentCommand): Result<Equipment>
+    + handle(RegisterIotDeviceCommand): Result<Equipment>
+    + handle(AssignEquipmentToEnvironmentCommand): Result<Equipment>
+    + handle(ChangeEquipmentStatusCommand): Result<EquipmentStatusChange>
+    + handle(LinkSensorCommand): Result<Long>
+  }
+  interface BpmConfigCommandService
+  interface MaintenanceCommandService {
+    + handle(RegisterMaintenanceCommand): Result<MaintenanceRecord>
+  }
+}
+
+package "equipment.application.queryservices" {
+  interface EquipmentQueryService
+  interface BpmConfigQueryService
+  interface MaintenanceQueryService {
+    + handle(GetMaintenanceByEquipmentIdQuery): Optional<List<MaintenanceRecord>>
+  }
+}
+
+package "equipment.application.internal.commandservices" {
+  class EquipmentCommandServiceImpl
+  class BpmConfigCommandServiceImpl
+  class MaintenanceCommandServiceImpl
+}
+
+EquipmentCommandServiceImpl ..|> EquipmentCommandService
+BpmConfigCommandServiceImpl ..|> BpmConfigCommandService
+MaintenanceCommandServiceImpl ..|> MaintenanceCommandService
+
+EquipmentCommandServiceImpl --> EquipmentRepository
+EquipmentCommandServiceImpl --> EquipmentStatusChangeRepository
+EquipmentCommandServiceImpl --> CurrentUser
+EquipmentCommandServiceImpl --> Clock : equipmentClock
+EquipmentCommandServiceImpl --> ApplicationEventPublisher
+BpmConfigCommandServiceImpl --> BpmParameterConfigRepository
+BpmConfigCommandServiceImpl --> EquipmentRepository
+BpmConfigCommandServiceImpl --> ApplicationEventPublisher
+MaintenanceCommandServiceImpl --> MaintenanceRepository
+MaintenanceCommandServiceImpl --> EquipmentRepository
+MaintenanceCommandServiceImpl --> Clock : equipmentClock
+MaintenanceCommandServiceImpl --> ApplicationEventPublisher
+
+EquipmentCommandServiceImpl ..> EquipmentRegisteredEvent
+EquipmentCommandServiceImpl ..> EquipmentAssignedToEnvironmentEvent
+EquipmentCommandServiceImpl ..> EquipmentStatusChangedEvent
+EquipmentCommandServiceImpl ..> SensorLinkedEvent
+BpmConfigCommandServiceImpl ..> BpmParameterConfiguredEvent
+MaintenanceCommandServiceImpl ..> MaintenanceRegisteredEvent
+
+package "equipment.application.internal.queryservices" {
+  class EquipmentQueryServiceImpl
+  class BpmConfigQueryServiceImpl
+  class MaintenanceQueryServiceImpl
+}
+
+EquipmentQueryServiceImpl ..|> EquipmentQueryService
+BpmConfigQueryServiceImpl ..|> BpmConfigQueryService
+MaintenanceQueryServiceImpl ..|> MaintenanceQueryService
+
+EquipmentQueryServiceImpl --> EquipmentRepository
+BpmConfigQueryServiceImpl --> BpmParameterConfigRepository
+MaintenanceQueryServiceImpl --> MaintenanceRepository
+MaintenanceQueryServiceImpl --> EquipmentRepository
+
+package "equipment.application.internal.eventhandlers" {
+  class EquipmentRegisteredEventHandler
+  class EquipmentLocationEventHandler
+  class SensorLinkedEventHandler
+  class BpmParameterConfiguredEventHandler
+  class CalibrationExpiryEventHandler
+  class MaintenanceRegisteredEventHandler
+}
+
+EquipmentRegisteredEventHandler ..> EquipmentRegisteredEvent
+EquipmentLocationEventHandler ..> EquipmentAssignedToEnvironmentEvent
+EquipmentLocationEventHandler ..> EquipmentStatusChangedEvent
+SensorLinkedEventHandler ..> SensorLinkedEvent
+BpmParameterConfiguredEventHandler ..> BpmParameterConfiguredEvent
+CalibrationExpiryEventHandler ..> CalibrationExpiredEvent
+MaintenanceRegisteredEventHandler ..> MaintenanceRegisteredEvent
+
+package "equipment.application.internal.outboundservices.acl" {
+  class ExternalLabService {
+    + existsLaboratoryById(labId: Long): boolean
+    + existsEnvironment(laboratoryId: Long, environmentId: Long): boolean
+  }
+}
+
+EquipmentCommandServiceImpl --> ExternalLabService
+
+ExternalLabService --> LaboratoryContextFacade
+
+package "equipment.interfaces.acl" {
+  interface EquipmentContextFacade {
+    + findEquipment(laboratoryId, equipmentId): Optional<EquipmentReference>
+    + findDevice(laboratoryId, environmentId, deviceId): Optional<DeviceReference>
+    + findEnvironmentalDevice(laboratoryId, environmentId): Optional<DeviceReference>
+    + findContainerMonitor(laboratoryId, deviceId): Optional<ContainerReference>
+    + findDevices(laboratoryId): List<DeviceReference>
+  }
+  class EquipmentReference <<record>>
+  class DeviceReference <<record>>
+  class ContainerReference <<record>> {
+    + id: Long
+    + laboratoryId: Long
+    + environmentId: Long
+    + name: String
+    + status: String
+    + isAvailable(): boolean
+    + isLocated(): boolean
+  }
+  class EquipmentTenantResourceLookup {
+    + types(): equipmentId, deviceId
+  }
+}
+
+package "equipment.application.acl" {
+  class EquipmentContextFacadeImpl
+}
+
+EquipmentContextFacadeImpl ..|> EquipmentContextFacade
+EquipmentContextFacadeImpl --> EquipmentQueryService
+EquipmentContextFacade ..> ContainerReference
+note bottom of ContainerReference
+  Container monitor where Inventory stores raw material lots and
+  Product Batch stores batches (US43, US78); only OPERATIONAL
+  monitors located in an environment receive them.
+end note
+EquipmentTenantResourceLookup ..|> TenantResourceLookup
+EquipmentTenantResourceLookup --> EquipmentRepository
+
+package "equipment.interfaces.events" {
+  class EquipmentRegisteredIntegrationEvent <<record>>
+  class EquipmentAssignedToEnvironmentIntegrationEvent <<record>>
+  class EquipmentStatusChangedIntegrationEvent <<record>>
+  class SensorLinkedIntegrationEvent <<record>>
+  class BpmParameterConfiguredIntegrationEvent <<record>>
+  class CalibrationExpiredIntegrationEvent <<record>>
+  class MaintenanceRegisteredIntegrationEvent <<record>>
+}
+
+EquipmentRegisteredEventHandler ..> EquipmentRegisteredIntegrationEvent
+EquipmentLocationEventHandler ..> EquipmentAssignedToEnvironmentIntegrationEvent
+EquipmentLocationEventHandler ..> EquipmentStatusChangedIntegrationEvent
+SensorLinkedEventHandler ..> SensorLinkedIntegrationEvent
+BpmParameterConfiguredEventHandler ..> BpmParameterConfiguredIntegrationEvent
+CalibrationExpiryEventHandler ..> CalibrationExpiredIntegrationEvent
+MaintenanceRegisteredEventHandler ..> MaintenanceRegisteredIntegrationEvent
+
+package "equipment.infrastructure.configuration" {
+  class EquipmentConfiguration {
+    + equipmentClock(): Clock
+  }
+}
+
+package "equipment.infrastructure.persistence.jpa.entities" {
+  class EquipmentPersistenceEntity {
+    - labId: Long
+    - environmentId: Long
+    - name: String
+    - type: String
+    - model: String
+    - serialNumber: String
+    - status: EquipmentStatus
+    - sensorExternalId: String
+    - deviceType: IotDeviceType
+    - firmwareVersion: String
+  }
+
+  class EquipmentStatusChangePersistenceEntity {
+    - equipmentId: Long
+    - environmentId: Long
+    - previousStatus: EquipmentStatus
+    - newStatus: EquipmentStatus
+    - reason: String
+    - changedByUserId: Long
+    - changedAt: Instant
+  }
+
+  class BpmParameterConfigPersistenceEntity {
+    - equipmentId: Long
+    - parameterName: String
+    - minValue: Double
+    - maxValue: Double
+    - unit: String
+  }
+
+  class MaintenancePersistenceEntity {
+    - equipmentId: Long
+    - environmentId: Long
+    - maintenanceDate: LocalDate
+    - technicianName: String
+    - technicianStaffId: Long
+    - description: String
+    - type: MaintenanceType
+  }
+}
+
+EquipmentPersistenceEntity --|> AuditableAbstractPersistenceEntity
+EquipmentStatusChangePersistenceEntity --|> AuditableAbstractPersistenceEntity
+BpmParameterConfigPersistenceEntity --|> AuditableAbstractPersistenceEntity
+MaintenancePersistenceEntity --|> AuditableAbstractPersistenceEntity
+
+package "equipment.infrastructure.persistence.jpa.repositories" {
+  interface EquipmentPersistenceRepository
+  interface EquipmentStatusChangePersistenceRepository
+  interface BpmParameterConfigPersistenceRepository
+  interface MaintenancePersistenceRepository
+}
+
+EquipmentPersistenceRepository ..|> JpaRepository
+EquipmentStatusChangePersistenceRepository ..|> JpaRepository
+BpmParameterConfigPersistenceRepository ..|> JpaRepository
+MaintenancePersistenceRepository ..|> JpaRepository
+
+EquipmentPersistenceRepository --> EquipmentPersistenceEntity
+EquipmentStatusChangePersistenceRepository --> EquipmentStatusChangePersistenceEntity
+BpmParameterConfigPersistenceRepository --> BpmParameterConfigPersistenceEntity
+MaintenancePersistenceRepository --> MaintenancePersistenceEntity
+
+package "equipment.infrastructure.persistence.jpa.assemblers" {
+  class EquipmentPersistenceAssembler
+  class BpmParameterConfigPersistenceAssembler
+  class MaintenancePersistenceAssembler
+}
+
+EquipmentPersistenceAssembler ..> Equipment
+EquipmentPersistenceAssembler ..> EquipmentPersistenceEntity
+BpmParameterConfigPersistenceAssembler ..> BpmParameterConfig
+BpmParameterConfigPersistenceAssembler ..> BpmParameterConfigPersistenceEntity
+MaintenancePersistenceAssembler ..> MaintenanceRecord
+MaintenancePersistenceAssembler ..> MaintenancePersistenceEntity
+
+package "equipment.infrastructure.persistence.jpa.adapters" {
+  class EquipmentRepositoryImpl
+  class EquipmentStatusChangeRepositoryImpl
+  class BpmParameterConfigRepositoryImpl
+  class MaintenanceRepositoryImpl
+}
+
+EquipmentRepositoryImpl ..|> EquipmentRepository
+EquipmentStatusChangeRepositoryImpl ..|> EquipmentStatusChangeRepository
+BpmParameterConfigRepositoryImpl ..|> BpmParameterConfigRepository
+MaintenanceRepositoryImpl ..|> MaintenanceRepository
+
+EquipmentRepositoryImpl --> EquipmentPersistenceRepository
+EquipmentRepositoryImpl --> EquipmentPersistenceAssembler
+EquipmentStatusChangeRepositoryImpl --> EquipmentStatusChangePersistenceRepository
+BpmParameterConfigRepositoryImpl --> BpmParameterConfigPersistenceRepository
+BpmParameterConfigRepositoryImpl --> BpmParameterConfigPersistenceAssembler
+MaintenanceRepositoryImpl --> MaintenancePersistenceRepository
+MaintenanceRepositoryImpl --> MaintenancePersistenceAssembler
+
+package "equipment.infrastructure.persistence.jpa.converters" {
+  class DeviceIdPersistenceConverter
+  class EquipmentStatusPersistenceConverter
+  class EquipmentTypePersistenceConverter
+}
+
+DeviceIdPersistenceConverter ..|> AttributeConverter
+EquipmentStatusPersistenceConverter ..|> AttributeConverter
+EquipmentTypePersistenceConverter ..|> AttributeConverter
+
+DeviceIdPersistenceConverter ..> DeviceId
+EquipmentStatusPersistenceConverter ..> EquipmentStatus
+EquipmentTypePersistenceConverter ..> EquipmentType
+
+package "equipment.interfaces.rest.resources" {
+  class RegisterEquipmentResource <<record>>
+  class RegisterIotDeviceResource <<record>>
+  class AssignEquipmentResource <<record>>
+  class AssignDeviceResource <<record>>
+  class ChangeEquipmentStatusResource <<record>>
+  class EquipmentResource <<record>>
+  class EquipmentStatusChangeResource <<record>>
+  class ConfigureBpmResource <<record>>
+  class BpmParameterConfigResource <<record>>
+  class RegisterMaintenanceResource <<record>>
+  class MaintenanceRecordResource <<record>>
+}
+
+package "equipment.interfaces.rest.transform" {
+  class RegisterEquipmentCommandFromResourceAssembler
+  class RegisterIotDeviceCommandFromResourceAssembler
+  class ChangeEquipmentStatusCommandFromResourceAssembler
+  class EquipmentResourceFromEntityAssembler
+  class EquipmentStatusChangeResourceFromEntityAssembler
+  class EquipmentLocationUriAssembler
+  class ConfigureBpmCommandFromResourceAssembler
+  class BpmConfigResourceFromEntityAssembler
+  class RegisterMaintenanceCommandFromResourceAssembler
+  class MaintenanceResourceFromEntityAssembler
+}
+
+RegisterEquipmentCommandFromResourceAssembler ..> RegisterEquipmentCommand
+RegisterIotDeviceCommandFromResourceAssembler ..> RegisterIotDeviceCommand
+ChangeEquipmentStatusCommandFromResourceAssembler ..> ChangeEquipmentStatusCommand
+EquipmentResourceFromEntityAssembler ..> EquipmentResource
+EquipmentStatusChangeResourceFromEntityAssembler ..> EquipmentStatusChangeResource
+ConfigureBpmCommandFromResourceAssembler ..> ConfigureBpmParametersCommand
+BpmConfigResourceFromEntityAssembler ..> BpmParameterConfigResource
+RegisterMaintenanceCommandFromResourceAssembler ..> RegisterMaintenanceCommand
+MaintenanceResourceFromEntityAssembler ..> MaintenanceRecordResource
+
+package "equipment.interfaces.rest" {
+  class LaboratoryEquipmentController
+  class LaboratoryDevicesController
+  class EnvironmentEquipmentController
+  class EnvironmentDevicesController
+  class EquipmentMaintenanceController
+  class EquipmentBpmConfigController
+}
+
+LaboratoryEquipmentController --> EquipmentCommandService
+LaboratoryEquipmentController --> EquipmentQueryService
+LaboratoryDevicesController --> EquipmentCommandService
+EnvironmentEquipmentController --> EquipmentCommandService
+EnvironmentDevicesController --> EquipmentCommandService
+EquipmentMaintenanceController --> MaintenanceCommandService
+EquipmentMaintenanceController --> MaintenanceQueryService
+EquipmentBpmConfigController --> BpmConfigCommandService
+EquipmentBpmConfigController --> BpmConfigQueryService
+LaboratoryDevicesController ..> EquipmentLocationUriAssembler
+EnvironmentEquipmentController ..> EquipmentLocationUriAssembler
+EnvironmentDevicesController ..> EquipmentLocationUriAssembler
+LaboratoryEquipmentController ..> ResponseEntityAssembler
+EnvironmentEquipmentController ..> ResponseEntityAssembler
+
+note bottom of LaboratoryEquipmentController
+  /api/v1/laboratories/{laboratoryId}/equipments[/{equipmentId}]              (TS31, TS32)
+  /api/v1/laboratories/{laboratoryId}/devices/environmental-devices           (TS37)
+  /api/v1/laboratories/{laboratoryId}/devices/container-monitors              (TS39)
+  .../environments/{environmentId}/equipments                                 (TS33)
+  .../environments/{environmentId}/equipments/{equipmentId}/status-changes    (TS34)
+  .../environments/{environmentId}/equipments/{equipmentId}/maintenance-records (TS35, TS36)
+  .../environments/{environmentId}/environmental-devices                      (TS38)
+  .../environments/{environmentId}/container-monitors                         (TS40)
+  /api/v1/laboratories/{laboratoryId}/equipments/{equipmentId}/bpm-configs[/{parameterName}]
+      GET list / GET one (404) / PUT creates or replaces the range of the parameter;
+      process parameters of the equipment (Report); environmental thresholds live in Tracking
+end note
+
+@enduml
